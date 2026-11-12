@@ -1,6 +1,15 @@
-import { and, desc, eq, gte, inArray, sum, type SQL } from "drizzle-orm";
+import { and, count, desc, eq, gte, inArray, sum, type SQL } from "drizzle-orm";
 import { db } from "~/db";
-import { CourseStatus, courses, purchases } from "~/db/schema";
+import {
+  CourseStatus,
+  LessonProgressStatus,
+  courses,
+  enrollments,
+  lessonProgress,
+  lessons,
+  modules,
+  purchases,
+} from "~/db/schema";
 import { ANALYTICS_RANGE_DAYS, type AnalyticsRange } from "~/lib/analyticsRange";
 
 // ─── Analytics Service ───
@@ -35,6 +44,79 @@ function salesAndEarnings(courseFilter: SQL, start: string | null) {
   const salesCents = Number(row?.salesCents ?? 0);
   const earningsCents = Math.round(salesCents * (1 - PLATFORM_CUT));
   return { salesCents, earningsCents };
+}
+
+/**
+ * The window's student group: enrollments in the course that started in the
+ * window, however the student enrolled (purchase or team seat).
+ */
+function windowGroupFilter(courseId: number, start: string | null) {
+  return and(
+    eq(enrollments.courseId, courseId),
+    start === null ? undefined : gte(enrollments.enrolledAt, start)
+  );
+}
+
+function lessonCount(courseId: number) {
+  const row = db
+    .select({ lessons: count() })
+    .from(lessons)
+    .innerJoin(modules, eq(lessons.moduleId, modules.id))
+    .where(eq(modules.courseId, courseId))
+    .get();
+  return row?.lessons ?? 0;
+}
+
+/** Completed lessons in the course, summed over the window's student group. */
+function groupCompletedLessons(courseId: number, start: string | null) {
+  const row = db
+    .select({ completed: count() })
+    .from(lessonProgress)
+    .innerJoin(lessons, eq(lessonProgress.lessonId, lessons.id))
+    .innerJoin(modules, eq(lessons.moduleId, modules.id))
+    .innerJoin(
+      enrollments,
+      and(
+        eq(enrollments.userId, lessonProgress.userId),
+        eq(enrollments.courseId, modules.courseId)
+      )
+    )
+    .where(
+      and(
+        windowGroupFilter(courseId, start),
+        eq(lessonProgress.status, LessonProgressStatus.Completed)
+      )
+    )
+    .get();
+  return row?.completed ?? 0;
+}
+
+/**
+ * Students who enrolled in the window, how many have finished, and how far
+ * they got. Rates are 0–1, and 0 when there is nothing to divide by.
+ */
+function studentStats(courseId: number, start: string | null) {
+  const row = db
+    .select({ students: count(), finished: count(enrollments.completedAt) })
+    .from(enrollments)
+    .where(windowGroupFilter(courseId, start))
+    .get();
+
+  const students = row?.students ?? 0;
+  const finished = row?.finished ?? 0;
+  // Every student shares the same lesson total, so the mean of each student's
+  // completed ÷ total equals the group's completions ÷ (students × total).
+  const possibleCompletions = students * lessonCount(courseId);
+  return {
+    students,
+    finished,
+    notFinished: students - finished,
+    finishingRate: students === 0 ? 0 : finished / students,
+    progressionRate:
+      possibleCompletions === 0
+        ? 0
+        : groupCompletedLessons(courseId, start) / possibleCompletions,
+  };
 }
 
 /** The instructor's published and archived courses, newest first. Drafts can't be picked. */
@@ -91,6 +173,9 @@ export function getInstructorAnalytics({
     selectedCourse:
       selectedCourseId === null
         ? null
-        : salesAndEarnings(eq(courses.id, selectedCourseId), start),
+        : {
+            ...salesAndEarnings(eq(courses.id, selectedCourseId), start),
+            ...studentStats(selectedCourseId, start),
+          },
   };
 }
