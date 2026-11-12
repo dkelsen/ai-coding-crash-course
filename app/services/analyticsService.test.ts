@@ -13,6 +13,7 @@ vi.mock("~/db", () => ({
 
 import { getInstructorAnalytics } from "./analyticsService";
 import { createTeamPurchase } from "./purchaseService";
+import { redeemCoupon } from "./couponService";
 
 const NOW = new Date("2026-06-30T12:00:00.000Z");
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -56,6 +57,67 @@ function addInstructor(email: string) {
     .values({ name: email, email, role: schema.UserRole.Instructor })
     .returning()
     .get();
+}
+
+let studentCounter = 0;
+
+function addStudent() {
+  studentCounter += 1;
+  return testDb
+    .insert(schema.users)
+    .values({
+      name: `Student ${studentCounter}`,
+      email: `student-${studentCounter}@example.com`,
+      role: schema.UserRole.Student,
+    })
+    .returning()
+    .get();
+}
+
+/** Enrolls a new student; returns the student's id. */
+function addEnrollment(
+  courseId: number,
+  enrolledAt: string,
+  completedAt: string | null = null
+) {
+  const student = addStudent();
+  testDb
+    .insert(schema.enrollments)
+    .values({ userId: student.id, courseId, enrolledAt, completedAt })
+    .run();
+  return student.id;
+}
+
+/** Adds a module with `lessonCount` lessons; returns the lesson ids in order. */
+function addModuleWithLessons(courseId: number, position: number, lessonCount: number) {
+  const mod = testDb
+    .insert(schema.modules)
+    .values({ courseId, title: `Module ${position}`, position })
+    .returning()
+    .get();
+  return Array.from({ length: lessonCount }, (_, index) =>
+    testDb
+      .insert(schema.lessons)
+      .values({ moduleId: mod.id, title: `Lesson ${position}.${index + 1}`, position: index + 1 })
+      .returning()
+      .get().id
+  );
+}
+
+function addProgress(
+  userId: number,
+  lessonId: number,
+  status = schema.LessonProgressStatus.Completed
+) {
+  testDb
+    .insert(schema.lessonProgress)
+    .values({
+      userId,
+      lessonId,
+      status,
+      completedAt: status === schema.LessonProgressStatus.Completed ? daysAgo(1) : null,
+    })
+    .run();
 }
 
 describe("getInstructorAnalytics", () => {
@@ -431,6 +493,126 @@ describe("getInstructorAnalytics", () => {
       });
 
       expect(result.selectedCourse).toMatchObject({ salesCents: 0, earningsCents: 0 });
+    });
+  });
+
+  describe("selected course students", () => {
+    it("counts enrollments in the selected course that started in the window", () => {
+      const other = addCourse({ createdAt: daysAgo(100), status: schema.CourseStatus.Draft });
+      addEnrollment(base.course.id, daysAgo(30));
+      addEnrollment(base.course.id, daysAgo(1));
+      addEnrollment(base.course.id, daysAgo(30, -1));
+      addEnrollment(other.id, daysAgo(1));
+
+      const result = getInstructorAnalytics({
+        instructorId: base.instructor.id,
+        range: "30d",
+        now: NOW,
+      });
+
+      expect(result.selectedCourse?.students).toBe(2);
+    });
+
+    it("counts a student who joined with a team seat", () => {
+      const { coupons } = createTeamPurchase(base.user.id, base.course.id, 24995, null, 5);
+      const redeemed = redeemCoupon(coupons[0].code, addStudent().id, "US");
+      expect(redeemed.ok).toBe(true);
+
+      const result = getInstructorAnalytics({
+        instructorId: base.instructor.id,
+        range: "all",
+        now: NOW,
+      });
+
+      expect(result.selectedCourse?.students).toBe(1);
+    });
+
+    it("splits the group into finished and not finished, with the finishing rate", () => {
+      addEnrollment(base.course.id, daysAgo(10), daysAgo(2));
+      addEnrollment(base.course.id, daysAgo(5));
+      addEnrollment(base.course.id, daysAgo(3));
+      addEnrollment(base.course.id, daysAgo(2));
+      // Finished, but enrolled before the window: not in the group.
+      addEnrollment(base.course.id, daysAgo(60), daysAgo(1));
+
+      const result = getInstructorAnalytics({
+        instructorId: base.instructor.id,
+        range: "30d",
+        now: NOW,
+      });
+
+      expect(result.selectedCourse).toMatchObject({
+        students: 4,
+        finished: 1,
+        notFinished: 3,
+        finishingRate: 0.25,
+      });
+    });
+
+    it("averages the share of the course's lessons completed across the group", () => {
+      const [l1, l2] = addModuleWithLessons(base.course.id, 1, 2);
+      const [l3, l4] = addModuleWithLessons(base.course.id, 2, 2);
+      const otherCourse = addCourse({ createdAt: daysAgo(100) });
+      const [otherLesson] = addModuleWithLessons(otherCourse.id, 1, 1);
+
+      const keen = addEnrollment(base.course.id, daysAgo(5));
+      addProgress(keen, l1);
+      addProgress(keen, l2);
+      addProgress(keen, l3);
+      addProgress(keen, l4, schema.LessonProgressStatus.InProgress);
+      addProgress(keen, otherLesson);
+
+      const idle = addEnrollment(base.course.id, daysAgo(5));
+      addProgress(idle, l1, schema.LessonProgressStatus.InProgress);
+
+      // Enrolled before the window: not in the group.
+      const veteran = addEnrollment(base.course.id, daysAgo(60));
+      for (const lesson of [l1, l2, l3, l4]) addProgress(veteran, lesson);
+
+      const result = getInstructorAnalytics({
+        instructorId: base.instructor.id,
+        range: "30d",
+        now: NOW,
+      });
+
+      // (3/4 + 0/4) / 2
+      expect(result.selectedCourse?.progressionRate).toBe(0.375);
+    });
+
+    it("reports zeros when nobody enrolled in the window", () => {
+      const [lesson] = addModuleWithLessons(base.course.id, 1, 1);
+      const veteran = addEnrollment(base.course.id, daysAgo(60), daysAgo(40));
+      addProgress(veteran, lesson);
+
+      const result = getInstructorAnalytics({
+        instructorId: base.instructor.id,
+        range: "30d",
+        now: NOW,
+      });
+
+      expect(result.selectedCourse).toMatchObject({
+        students: 0,
+        finished: 0,
+        notFinished: 0,
+        finishingRate: 0,
+        progressionRate: 0,
+      });
+    });
+
+    it("reports a progression rate of zero for a course with no lessons", () => {
+      addEnrollment(base.course.id, daysAgo(5), daysAgo(1));
+
+      const result = getInstructorAnalytics({
+        instructorId: base.instructor.id,
+        range: "30d",
+        now: NOW,
+      });
+
+      expect(result.selectedCourse).toMatchObject({
+        students: 1,
+        finishingRate: 1,
+        progressionRate: 0,
+      });
     });
   });
 

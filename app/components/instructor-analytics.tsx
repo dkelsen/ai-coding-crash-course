@@ -26,6 +26,16 @@ function formatMoney(cents: number): string {
   return moneyFormatter.format(cents / 100);
 }
 
+const percentFormatter = new Intl.NumberFormat("en-US", {
+  style: "percent",
+  maximumFractionDigits: 0,
+});
+
+/** A 0–1 rate as a whole-number percentage, e.g. 0.125 → "13%". */
+function formatPercent(rate: number): string {
+  return percentFormatter.format(rate);
+}
+
 function StatCard({
   label,
   value,
@@ -118,6 +128,17 @@ export function InstructorAnalytics({
           <div className="grid gap-4 sm:grid-cols-2">
             <StatCard label="Course sales" value={formatMoney(selectedCourse.salesCents)} />
             <StatCard label="Course earnings" value={formatMoney(selectedCourse.earningsCents)} />
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-3">
+            <StatCard label="Students" value={String(selectedCourse.students)} />
+            <StatCard label="Finished" value={String(selectedCourse.finished)} />
+            <StatCard label="Not finished" value={String(selectedCourse.notFinished)} />
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <StatCard label="Finishing rate" value={formatPercent(selectedCourse.finishingRate)} />
+            <StatCard label="Progression rate" value={formatPercent(selectedCourse.progressionRate)} />
           </div>
 
           <div className="grid gap-4 sm:grid-cols-2">

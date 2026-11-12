@@ -10,6 +10,16 @@ import { CourseStatus } from "~/db/schema";
 const NO_SALES = { salesCents: 0, earningsCents: 0 };
 const NO_QUESTIONS = { questions: 0, unansweredQuestions: 0 };
 
+const EMPTY_COURSE: NonNullable<InstructorAnalyticsData["selectedCourse"]> = {
+  ...NO_SALES,
+  students: 0,
+  finished: 0,
+  notFinished: 0,
+  finishingRate: 0,
+  progressionRate: 0,
+  ...NO_QUESTIONS,
+};
+
 function analyticsData(
   overrides: Partial<InstructorAnalyticsData> = {}
 ): InstructorAnalyticsData {
@@ -17,7 +27,7 @@ function analyticsData(
     totals: NO_SALES,
     courses: [{ id: 1, title: "Intro to TypeScript", status: CourseStatus.Published }],
     selectedCourseId: 1,
-    selectedCourse: { ...NO_SALES, ...NO_QUESTIONS },
+    selectedCourse: EMPTY_COURSE,
     ...overrides,
   };
 }
@@ -96,7 +106,7 @@ describe("InstructorAnalytics", () => {
     renderAnalytics(
       analyticsData({
         totals: { salesCents: 30000, earningsCents: 24000 },
-        selectedCourse: { salesCents: 10000, earningsCents: 8000, ...NO_QUESTIONS },
+        selectedCourse: { ...EMPTY_COURSE, salesCents: 10000, earningsCents: 8000 },
       })
     );
 
@@ -107,7 +117,7 @@ describe("InstructorAnalytics", () => {
   it("shows the selected course's questions with how many are unanswered", () => {
     renderAnalytics(
       analyticsData({
-        selectedCourse: { ...NO_SALES, questions: 12, unansweredQuestions: 3 },
+        selectedCourse: { ...EMPTY_COURSE, questions: 12, unansweredQuestions: 3 },
       })
     );
 
@@ -184,5 +194,36 @@ describe("InstructorAnalytics", () => {
     expect(screen.queryByRole("combobox", { name: "Course" })).not.toBeInTheDocument();
     expect(screen.getByText("Total sales").parentElement).toHaveTextContent("$0.00");
     expect(screen.getByText("Total earnings").parentElement).toHaveTextContent("$0.00");
+  });
+
+  it("shows the selected course's student counts and rates as whole-number percentages", () => {
+    renderAnalytics(
+      analyticsData({
+        selectedCourse: {
+          ...EMPTY_COURSE,
+          students: 3,
+          finished: 2,
+          notFinished: 1,
+          finishingRate: 2 / 3,
+          progressionRate: 0.125,
+        },
+      })
+    );
+
+    expect(screen.getByText("Students").parentElement).toHaveTextContent("3");
+    expect(screen.getByText("Finished").parentElement).toHaveTextContent("2");
+    expect(screen.getByText("Not finished").parentElement).toHaveTextContent("1");
+    expect(screen.getByText("Finishing rate").parentElement).toHaveTextContent("67%");
+    expect(screen.getByText("Progression rate").parentElement).toHaveTextContent("13%");
+  });
+
+  it("shows zero students and 0% rates for an empty period", () => {
+    renderAnalytics(analyticsData());
+
+    expect(screen.getByText("Students").parentElement).toHaveTextContent("0");
+    expect(screen.getByText("Finished").parentElement).toHaveTextContent("0");
+    expect(screen.getByText("Not finished").parentElement).toHaveTextContent("0");
+    expect(screen.getByText("Finishing rate").parentElement).toHaveTextContent("0%");
+    expect(screen.getByText("Progression rate").parentElement).toHaveTextContent("0%");
   });
 });
