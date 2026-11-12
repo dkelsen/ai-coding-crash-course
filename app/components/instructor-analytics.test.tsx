@@ -3,7 +3,7 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, useLocation } from "react-router";
 import { InstructorAnalytics } from "./instructor-analytics";
-import type { InstructorAnalytics as InstructorAnalyticsData } from "~/services/analyticsService";
+import type { InstructorAnalyticsData } from "~/services/analyticsService";
 import type { AnalyticsRange } from "~/lib/analyticsRange";
 import { CourseStatus } from "~/db/schema";
 

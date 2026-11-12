@@ -503,7 +503,7 @@ describe("commentService", () => {
 
       expect(countCourseQuestions(base.course.id, null)).toEqual({
         questions: 1,
-        unanswered: 1,
+        unansweredQuestions: 1,
       });
     });
 
@@ -522,10 +522,10 @@ describe("commentService", () => {
 
       expect(
         countCourseQuestions(base.course.id, "2026-06-01T00:00:00.000Z")
-      ).toEqual({ questions: 2, unanswered: 2 });
+      ).toEqual({ questions: 2, unansweredQuestions: 2 });
       expect(countCourseQuestions(base.course.id, null)).toEqual({
         questions: 3,
-        unanswered: 3,
+        unansweredQuestions: 3,
       });
     });
 
@@ -551,7 +551,7 @@ describe("commentService", () => {
 
       expect(countCourseQuestions(base.course.id, null)).toEqual({
         questions: 1,
-        unanswered: 1,
+        unansweredQuestions: 1,
       });
     });
 
@@ -578,7 +578,7 @@ describe("commentService", () => {
 
       expect(countCourseQuestions(base.course.id, null)).toEqual({
         questions: 4,
-        unanswered: 2,
+        unansweredQuestions: 2,
       });
     });
 
@@ -597,14 +597,14 @@ describe("commentService", () => {
 
       expect(countCourseQuestions(base.course.id, null)).toEqual({
         questions: 1,
-        unanswered: 1,
+        unansweredQuestions: 1,
       });
     });
 
     it("reports zeros for a course with no questions", () => {
       expect(countCourseQuestions(base.course.id, null)).toEqual({
         questions: 0,
-        unanswered: 0,
+        unansweredQuestions: 0,
       });
     });
   });

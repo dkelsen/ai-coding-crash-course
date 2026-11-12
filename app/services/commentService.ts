@@ -8,7 +8,6 @@ import {
   sql,
   desc,
   asc,
-  gte,
 } from "drizzle-orm";
 import { alias } from "drizzle-orm/sqlite-core";
 import { db } from "~/db";
@@ -21,6 +20,7 @@ import {
   UserRole,
 } from "~/db/schema";
 import { MIN_COMMENT_LENGTH, MAX_COMMENT_LENGTH } from "~/lib/comments";
+import { inWindow, type WindowStart } from "~/lib/timeWindow";
 
 // ─── Comment Service ───
 // Lesson comments: a flat list of top-level questions, each with one level of
@@ -354,13 +354,13 @@ export function getUnansweredQuestions(
 }
 
 /**
- * How many questions were asked on a course's lessons since a given ISO
- * timestamp (null for no lower bound), and how many of those are unanswered.
+ * How many questions were asked on a course's lessons since the window start,
+ * and how many of those are unanswered.
  */
 export function countCourseQuestions(
   courseId: number,
-  since: string | null
-): { questions: number; unanswered: number } {
+  since: WindowStart
+): { questions: number; unansweredQuestions: number } {
   const row = db
     .select({
       questions: sql<number>`count(*)`,
@@ -375,13 +375,13 @@ export function countCourseQuestions(
       and(
         isQuestion(),
         eq(courses.id, courseId),
-        since === null ? undefined : gte(comments.createdAt, since)
+        inWindow(comments.createdAt, since)
       )
     )
     .get();
 
   return {
     questions: Number(row?.questions ?? 0),
-    unanswered: Number(row?.unanswered ?? 0),
+    unansweredQuestions: Number(row?.unanswered ?? 0),
   };
 }

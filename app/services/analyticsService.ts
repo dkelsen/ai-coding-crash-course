@@ -1,4 +1,14 @@
-import { and, asc, count, desc, eq, gte, inArray, sum, type SQL } from "drizzle-orm";
+import {
+  and,
+  asc,
+  count,
+  countDistinct,
+  desc,
+  eq,
+  inArray,
+  sum,
+  type SQL,
+} from "drizzle-orm";
 import { db } from "~/db";
 import {
   CourseStatus,
@@ -11,6 +21,7 @@ import {
   purchases,
 } from "~/db/schema";
 import { ANALYTICS_RANGE_DAYS, type AnalyticsRange } from "~/lib/analyticsRange";
+import { inWindow, type WindowStart } from "~/lib/timeWindow";
 import { countCourseQuestions } from "~/services/commentService";
 
 // ─── Analytics Service ───
@@ -21,25 +32,23 @@ export const PLATFORM_CUT = 0.2;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** ISO timestamp of the earliest moment inside the window, or null for no lower bound. */
-function windowStart(range: AnalyticsRange, now: Date): string | null {
+/** The earliest moment inside the window. */
+function windowStart(range: AnalyticsRange, now: Date): WindowStart {
   const days = ANALYTICS_RANGE_DAYS[range];
   if (days === null) return null;
   return new Date(now.getTime() - days * DAY_MS).toISOString();
 }
 
+/** A course seen through an analytics time window. */
+type CourseWindow = { courseId: number; start: WindowStart };
+
 /** Sales in the window, with the instructor's share after the platform cut. */
-function salesAndEarnings(courseFilter: SQL, start: string | null) {
+function salesAndEarnings(courseFilter: SQL, start: WindowStart) {
   const row = db
     .select({ salesCents: sum(purchases.amountPaid) })
     .from(purchases)
     .innerJoin(courses, eq(purchases.courseId, courses.id))
-    .where(
-      and(
-        courseFilter,
-        start === null ? undefined : gte(purchases.createdAt, start)
-      )
-    )
+    .where(and(courseFilter, inWindow(purchases.createdAt, start)))
     .get();
 
   const salesCents = Number(row?.salesCents ?? 0);
@@ -51,79 +60,44 @@ function salesAndEarnings(courseFilter: SQL, start: string | null) {
  * The window's student group: enrollments in the course that started in the
  * window, however the student enrolled (purchase or team seat).
  */
-function windowGroupFilter(courseId: number, start: string | null) {
+function windowGroupFilter({ courseId, start }: CourseWindow) {
   return and(
     eq(enrollments.courseId, courseId),
-    start === null ? undefined : gte(enrollments.enrolledAt, start)
+    inWindow(enrollments.enrolledAt, start)
   );
 }
 
-function lessonCount(courseId: number) {
-  const row = db
-    .select({ lessons: count() })
-    .from(lessons)
-    .innerJoin(modules, eq(lessons.moduleId, modules.id))
-    .where(eq(modules.courseId, courseId))
-    .get();
-  return row?.lessons ?? 0;
-}
-
-/** Completed lessons in the course, summed over the window's student group. */
-function groupCompletedLessons(courseId: number, start: string | null) {
-  const row = db
-    .select({ completed: count() })
-    .from(lessonProgress)
-    .innerJoin(lessons, eq(lessonProgress.lessonId, lessons.id))
-    .innerJoin(modules, eq(lessons.moduleId, modules.id))
-    .innerJoin(
-      enrollments,
-      and(
-        eq(enrollments.userId, lessonProgress.userId),
-        eq(enrollments.courseId, modules.courseId)
-      )
-    )
-    .where(
-      and(
-        windowGroupFilter(courseId, start),
-        eq(lessonProgress.status, LessonProgressStatus.Completed)
-      )
-    )
-    .get();
-  return row?.completed ?? 0;
-}
-
 /**
- * Students who enrolled in the window, how many have finished, and how far
- * they got. Rates are 0–1, and 0 when there is nothing to divide by.
+ * Students who enrolled in the window and how many have finished. The rate is
+ * 0–1, and 0 when the group is empty.
  */
-function studentStats(courseId: number, start: string | null) {
+function studentStats(window: CourseWindow) {
   const row = db
     .select({ students: count(), finished: count(enrollments.completedAt) })
     .from(enrollments)
-    .where(windowGroupFilter(courseId, start))
+    .where(windowGroupFilter(window))
     .get();
 
   const students = row?.students ?? 0;
   const finished = row?.finished ?? 0;
-  // Every student shares the same lesson total, so the mean of each student's
-  // completed ÷ total equals the group's completions ÷ (students × total).
-  const possibleCompletions = students * lessonCount(courseId);
   return {
     students,
     finished,
     notFinished: students - finished,
     finishingRate: students === 0 ? 0 : finished / students,
-    progressionRate:
-      possibleCompletions === 0
-        ? 0
-        : groupCompletedLessons(courseId, start) / possibleCompletions,
   };
 }
 
-/** Per-lesson completion counts for the window's student group, keyed by lesson id. */
-function groupCompletionsByLesson(courseId: number, start: string | null) {
+/**
+ * How many distinct students in the window's group completed each lesson of
+ * the course, keyed by lesson id. Duplicate progress rows count once.
+ */
+function groupCompletionsByLesson(window: CourseWindow) {
   const rows = db
-    .select({ lessonId: lessons.id, completed: count() })
+    .select({
+      lessonId: lessons.id,
+      completed: countDistinct(lessonProgress.userId),
+    })
     .from(lessonProgress)
     .innerJoin(lessons, eq(lessonProgress.lessonId, lessons.id))
     .innerJoin(modules, eq(lessons.moduleId, modules.id))
@@ -136,7 +110,7 @@ function groupCompletionsByLesson(courseId: number, start: string | null) {
     )
     .where(
       and(
-        windowGroupFilter(courseId, start),
+        windowGroupFilter(window),
         eq(lessonProgress.status, LessonProgressStatus.Completed)
       )
     )
@@ -161,10 +135,9 @@ type ModuleCompletion = { id: number; title: string; lessons: LessonCompletion[]
  */
 function lessonCompletion(
   courseId: number,
-  start: string | null,
+  completions: Map<number, number>,
   students: number
 ): ModuleCompletion[] {
-  const completions = groupCompletionsByLesson(courseId, start);
   const rows = db
     .select({
       moduleId: modules.id,
@@ -226,23 +199,44 @@ function selectCourseId(
   return (requested ?? fallback)?.id ?? null;
 }
 
-/** Questions asked on the course in the window, and how many still await staff. */
-function courseQuestions(courseId: number, start: string | null) {
-  const { questions, unanswered } = countCourseQuestions(courseId, start);
-  return { questions, unansweredQuestions: unanswered };
+/**
+ * Mean progression across the window's group: each student's distinct
+ * completed lessons ÷ the course's lessons. Every student shares the same
+ * lesson total, so this is the group's distinct completions ÷ (students ×
+ * lessons). 0–1, and 0 when there is nothing to divide by.
+ */
+function progressionRate(
+  modules: ModuleCompletion[],
+  students: number
+): number {
+  const lessonsInCourse = modules.flatMap((mod) => mod.lessons);
+  const possible = students * lessonsInCourse.length;
+  if (possible === 0) return 0;
+  const completed = lessonsInCourse.reduce(
+    (total, lesson) => total + lesson.completedCount,
+    0
+  );
+  return completed / possible;
 }
 
-function selectedCourseStats(courseId: number, start: string | null) {
-  const students = studentStats(courseId, start);
+function selectedCourseStats(window: CourseWindow) {
+  const { courseId, start } = window;
+  const students = studentStats(window);
+  const modules = lessonCompletion(
+    courseId,
+    groupCompletionsByLesson(window),
+    students.students
+  );
   return {
     ...salesAndEarnings(eq(courses.id, courseId), start),
     ...students,
-    ...courseQuestions(courseId, start),
-    modules: lessonCompletion(courseId, start, students.students),
+    progressionRate: progressionRate(modules, students.students),
+    ...countCourseQuestions(courseId, start),
+    modules,
   };
 }
 
-export type InstructorAnalytics = ReturnType<typeof getInstructorAnalytics>;
+export type InstructorAnalyticsData = ReturnType<typeof getInstructorAnalytics>;
 
 export function getInstructorAnalytics({
   instructorId,
@@ -264,6 +258,6 @@ export function getInstructorAnalytics({
     courses: options,
     selectedCourseId,
     selectedCourse:
-      selectedCourseId === null ? null : selectedCourseStats(selectedCourseId, start),
+      selectedCourseId === null ? null : selectedCourseStats({ courseId: selectedCourseId, start }),
   };
 }

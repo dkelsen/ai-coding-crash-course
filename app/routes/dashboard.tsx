@@ -137,7 +137,7 @@ export default function Dashboard({ loaderData }: Route.ComponentProps) {
         <div className="mb-8">
           <h1 className="text-3xl font-bold">Instructor Dashboard</h1>
           <p className="mt-1 text-muted-foreground">
-            Sales and earnings for your courses
+            Sales, earnings, student progress, and questions for your courses
           </p>
         </div>
 

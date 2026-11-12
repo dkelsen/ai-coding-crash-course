@@ -579,6 +579,27 @@ describe("getInstructorAnalytics", () => {
       expect(result.selectedCourse?.progressionRate).toBe(0.375);
     });
 
+    it("counts a lesson completed twice by the same student once", () => {
+      const [l1, l2] = addModuleWithLessons(base.course.id, 1, 2);
+      const student = addEnrollment(base.course.id, daysAgo(5));
+      addProgress(student, l1);
+      addProgress(student, l1);
+      addProgress(student, l2, schema.LessonProgressStatus.InProgress);
+
+      const result = getInstructorAnalytics({
+        instructorId: base.instructor.id,
+        range: "30d",
+        now: NOW,
+      });
+
+      expect(result.selectedCourse?.progressionRate).toBe(0.5);
+      expect(result.selectedCourse?.modules[0].lessons[0]).toMatchObject({
+        id: l1,
+        completedCount: 1,
+        completedRate: 1,
+      });
+    });
+
     it("reports zeros when nobody enrolled in the window", () => {
       const [lesson] = addModuleWithLessons(base.course.id, 1, 1);
       const veteran = addEnrollment(base.course.id, daysAgo(60), daysAgo(40));

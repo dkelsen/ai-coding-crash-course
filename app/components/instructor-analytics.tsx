@@ -15,7 +15,7 @@ import {
   parseAnalyticsRange,
   type AnalyticsRange,
 } from "~/lib/analyticsRange";
-import type { InstructorAnalytics as InstructorAnalyticsData } from "~/services/analyticsService";
+import type { InstructorAnalyticsData } from "~/services/analyticsService";
 
 const moneyFormatter = new Intl.NumberFormat("en-US", {
   style: "currency",
@@ -95,7 +95,7 @@ function LessonCompletionTable({ modules }: { modules: CourseModules }) {
   );
 }
 
-type PickerCourse =InstructorAnalyticsData["courses"][number];
+type PickerCourse = InstructorAnalyticsData["courses"][number];
 
 function courseLabel(course: PickerCourse): string {
   return course.status === CourseStatus.Archived
