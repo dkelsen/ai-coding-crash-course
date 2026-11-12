@@ -5,6 +5,21 @@ import { MemoryRouter, useLocation } from "react-router";
 import { InstructorAnalytics } from "./instructor-analytics";
 import type { InstructorAnalytics as InstructorAnalyticsData } from "~/services/analyticsService";
 import type { AnalyticsRange } from "~/lib/analyticsRange";
+import { CourseStatus } from "~/db/schema";
+
+const NO_SALES = { salesCents: 0, earningsCents: 0 };
+
+function analyticsData(
+  overrides: Partial<InstructorAnalyticsData> = {}
+): InstructorAnalyticsData {
+  return {
+    totals: NO_SALES,
+    courses: [{ id: 1, title: "Intro to TypeScript", status: CourseStatus.Published }],
+    selectedCourseId: 1,
+    selectedCourse: NO_SALES,
+    ...overrides,
+  };
+}
 
 function renderAnalytics(
   analytics: InstructorAnalyticsData,
@@ -19,23 +34,23 @@ function renderAnalytics(
 
 describe("InstructorAnalytics", () => {
   it("shows sales and earnings as dollars", () => {
-    renderAnalytics({ totals: { salesCents: 10000, earningsCents: 8000 } });
+    renderAnalytics(analyticsData({ totals: { salesCents: 10000, earningsCents: 8000 } }));
 
-    expect(screen.getByText("Sales").parentElement).toHaveTextContent("$100.00");
-    expect(screen.getByText("Earnings").parentElement).toHaveTextContent("$80.00");
+    expect(screen.getByText("Total sales").parentElement).toHaveTextContent("$100.00");
+    expect(screen.getByText("Total earnings").parentElement).toHaveTextContent("$80.00");
   });
 
   it("shows zeros for a period with no sales", () => {
-    renderAnalytics({ totals: { salesCents: 0, earningsCents: 0 } });
+    renderAnalytics(analyticsData());
 
-    expect(screen.getByText("Sales").parentElement).toHaveTextContent("$0.00");
-    expect(screen.getByText("Earnings").parentElement).toHaveTextContent("$0.00");
+    expect(screen.getByText("Total sales").parentElement).toHaveTextContent("$0.00");
+    expect(screen.getByText("Total earnings").parentElement).toHaveTextContent("$0.00");
   });
 
   it("separates thousands", () => {
-    renderAnalytics({ totals: { salesCents: 123456789, earningsCents: 98765431 } });
+    renderAnalytics(analyticsData({ totals: { salesCents: 123456789, earningsCents: 98765431 } }));
 
-    expect(screen.getByText("Sales").parentElement).toHaveTextContent("$1,234,567.89");
+    expect(screen.getByText("Total sales").parentElement).toHaveTextContent("$1,234,567.89");
   });
 
   it("writes the chosen range to the URL", async () => {
@@ -45,7 +60,7 @@ describe("InstructorAnalytics", () => {
     render(
       <MemoryRouter initialEntries={["/dashboard?range=30d"]}>
         <InstructorAnalytics
-          analytics={{ totals: { salesCents: 0, earningsCents: 0 } }}
+          analytics={analyticsData()}
           range="30d"
         />
         <CurrentSearch />
@@ -63,7 +78,7 @@ describe("InstructorAnalytics", () => {
     ["90d", "90 days"],
     ["all", "All time"],
   ] as const)("marks %s as the selected range", (range, label) => {
-    renderAnalytics({ totals: { salesCents: 0, earningsCents: 0 } }, range);
+    renderAnalytics(analyticsData(), range);
 
     expect(screen.getByRole("tab", { name: label })).toHaveAttribute(
       "aria-selected",
@@ -74,5 +89,79 @@ describe("InstructorAnalytics", () => {
         expect(other).toHaveAttribute("aria-selected", "false");
       }
     }
+  });
+
+  it("shows the selected course's sales and earnings as dollars", () => {
+    renderAnalytics(
+      analyticsData({
+        totals: { salesCents: 30000, earningsCents: 24000 },
+        selectedCourse: { salesCents: 10000, earningsCents: 8000 },
+      })
+    );
+
+    expect(screen.getByText("Course sales").parentElement).toHaveTextContent("$100.00");
+    expect(screen.getByText("Course earnings").parentElement).toHaveTextContent("$80.00");
+  });
+
+  it("labels an archived course in the picker", async () => {
+    renderAnalytics(
+      analyticsData({
+        courses: [
+          { id: 1, title: "Intro to TypeScript", status: CourseStatus.Published },
+          { id: 2, title: "Legacy React", status: CourseStatus.Archived },
+        ],
+        selectedCourseId: 2,
+      })
+    );
+
+    const picker = screen.getByRole("combobox", { name: "Course" });
+    expect(picker).toHaveTextContent("Legacy React (Archived)");
+
+    await userEvent.click(picker);
+
+    expect(screen.getByRole("option", { name: "Intro to TypeScript" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Legacy React (Archived)" })).toBeInTheDocument();
+  });
+
+  it("writes the chosen course to the URL and keeps the range", async () => {
+    function CurrentSearch() {
+      return <output data-testid="search">{useLocation().search}</output>;
+    }
+    render(
+      <MemoryRouter initialEntries={["/dashboard?range=90d&course=1"]}>
+        <InstructorAnalytics
+          analytics={analyticsData({
+            courses: [
+              { id: 1, title: "Intro to TypeScript", status: CourseStatus.Published },
+              { id: 2, title: "Legacy React", status: CourseStatus.Archived },
+            ],
+          })}
+          range="90d"
+        />
+        <CurrentSearch />
+      </MemoryRouter>
+    );
+
+    await userEvent.click(screen.getByRole("combobox", { name: "Course" }));
+    await userEvent.click(screen.getByRole("option", { name: "Legacy React (Archived)" }));
+
+    expect(screen.getByTestId("search")).toHaveTextContent("?range=90d&course=2");
+  });
+
+  it("asks the instructor to publish a course when there is nothing to pick", () => {
+    renderAnalytics(
+      analyticsData({
+        courses: [],
+        selectedCourseId: null,
+        selectedCourse: null,
+      })
+    );
+
+    expect(
+      screen.getByText("Publish a course to see its analytics.")
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Course" })).not.toBeInTheDocument();
+    expect(screen.getByText("Total sales").parentElement).toHaveTextContent("$0.00");
+    expect(screen.getByText("Total earnings").parentElement).toHaveTextContent("$0.00");
   });
 });

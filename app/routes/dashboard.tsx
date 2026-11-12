@@ -34,9 +34,13 @@ export async function loader({ request }: Route.LoaderArgs) {
   const user = getUserById(currentUserId);
 
   if (user?.role === UserRole.Instructor) {
-    const range = parseAnalyticsRange(new URL(request.url).searchParams.get("range"));
+    const searchParams = new URL(request.url).searchParams;
+    const range = parseAnalyticsRange(searchParams.get("range"));
+    // Anything that isn't one of the instructor's pickable courses falls back in the service.
+    const courseId = Number(searchParams.get("course")) || undefined;
     const analytics = getInstructorAnalytics({
       instructorId: currentUserId,
+      courseId,
       range,
       now: new Date(),
     });
@@ -133,7 +137,7 @@ export default function Dashboard({ loaderData }: Route.ComponentProps) {
         <div className="mb-8">
           <h1 className="text-3xl font-bold">Instructor Dashboard</h1>
           <p className="mt-1 text-muted-foreground">
-            Sales and earnings across your courses
+            Sales and earnings for your courses
           </p>
         </div>
 

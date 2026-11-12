@@ -1,6 +1,14 @@
 import { useSearchParams } from "react-router";
 import { Card, CardDescription, CardHeader, CardTitle } from "~/components/ui/card";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "~/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "~/components/ui/tabs";
+import { CourseStatus } from "~/db/schema";
 import {
   ANALYTICS_RANGES,
   ANALYTICS_RANGE_LABELS,
@@ -29,7 +37,15 @@ function StatCard({ label, value }: { label: string; value: string }) {
   );
 }
 
-/** Displays instructor analytics. Holds no data of its own; the filter writes `?range=`. */
+type PickerCourse = InstructorAnalyticsData["courses"][number];
+
+function courseLabel(course: PickerCourse): string {
+  return course.status === CourseStatus.Archived
+    ? `${course.title} (Archived)`
+    : course.title;
+}
+
+/** Displays instructor analytics. Holds no data of its own; the controls write `?range=` and `?course=`. */
 export function InstructorAnalytics({
   analytics,
   range,
@@ -39,17 +55,19 @@ export function InstructorAnalytics({
 }) {
   const [, setSearchParams] = useSearchParams();
 
-  function handleRangeChange(value: string) {
+  function setParam(name: string, value: string) {
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev);
-      next.set("range", parseAnalyticsRange(value));
+      next.set(name, value);
       return next;
     });
   }
 
+  const { selectedCourse, selectedCourseId } = analytics;
+
   return (
     <div className="space-y-6">
-      <Tabs value={range} onValueChange={handleRangeChange}>
+      <Tabs value={range} onValueChange={(value) => setParam("range", parseAnalyticsRange(value))}>
         <TabsList aria-label="Time range">
           {ANALYTICS_RANGES.map((option) => (
             <TabsTrigger key={option} value={option}>
@@ -60,9 +78,38 @@ export function InstructorAnalytics({
       </Tabs>
 
       <div className="grid gap-4 sm:grid-cols-2">
-        <StatCard label="Sales" value={formatMoney(analytics.totals.salesCents)} />
-        <StatCard label="Earnings" value={formatMoney(analytics.totals.earningsCents)} />
+        <StatCard label="Total sales" value={formatMoney(analytics.totals.salesCents)} />
+        <StatCard label="Total earnings" value={formatMoney(analytics.totals.earningsCents)} />
       </div>
+
+      {selectedCourse === null || selectedCourseId === null ? (
+        <p className="text-muted-foreground">
+          Publish a course to see its analytics.
+        </p>
+      ) : (
+        <section className="space-y-4">
+          <Select
+            value={String(selectedCourseId)}
+            onValueChange={(value) => setParam("course", value)}
+          >
+            <SelectTrigger aria-label="Course" className="w-full sm:w-80">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {analytics.courses.map((course) => (
+                <SelectItem key={course.id} value={String(course.id)}>
+                  {courseLabel(course)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <StatCard label="Course sales" value={formatMoney(selectedCourse.salesCents)} />
+            <StatCard label="Course earnings" value={formatMoney(selectedCourse.earningsCents)} />
+          </div>
+        </section>
+      )}
     </div>
   );
 }
