@@ -8,6 +8,7 @@ import {
   sql,
   desc,
   asc,
+  gte,
 } from "drizzle-orm";
 import { alias } from "drizzle-orm/sqlite-core";
 import { db } from "~/db";
@@ -268,18 +269,28 @@ export type QueuedQuestion = {
   authorAvatarUrl: string | null;
 };
 
+// What makes a comment a question, and what makes it unanswered, is defined
+// once below and shared by the instructor queue and the analytics counts.
+// Both conditions expect `comments` joined to `questionAuthor` and, through
+// lessons and modules, to `courses`.
+const questionAuthor = alias(users, "author");
+
 /**
- * Questions still waiting on an answer, newest first.
- *
- * A question qualifies when it is top-level, not deleted, not written by staff,
- * and has no reply from the course's instructor or an admin. Pass null for
- * instructorId to span every course (admins); pass an id to scope to the
- * courses that instructor owns.
+ * A question is a top-level, non-deleted comment not written by staff (the
+ * course's instructor or an admin).
  */
-export function getUnansweredQuestions(
-  instructorId: number | null
-): QueuedQuestion[] {
-  const author = alias(users, "author");
+function isQuestion() {
+  return and(
+    isNull(comments.parentId),
+    isNull(comments.deletedAt),
+    // Staff asking their own question shouldn't queue up as work for themselves.
+    ne(questionAuthor.role, UserRole.Admin),
+    ne(comments.userId, courses.instructorId)
+  );
+}
+
+/** A question is unanswered while it has no live reply from staff. */
+function isUnanswered() {
   const reply = alias(comments, "reply");
   const replyAuthor = alias(users, "reply_author");
 
@@ -299,19 +310,18 @@ export function getUnansweredQuestions(
       )
     );
 
-  const conditions = [
-    isNull(comments.parentId),
-    isNull(comments.deletedAt),
-    // Staff asking their own question shouldn't queue up as work for themselves.
-    ne(author.role, UserRole.Admin),
-    ne(comments.userId, courses.instructorId),
-    notExists(staffReply),
-  ];
+  return notExists(staffReply);
+}
 
-  if (instructorId !== null) {
-    conditions.push(eq(courses.instructorId, instructorId));
-  }
-
+/**
+ * Questions still waiting on an answer, newest first.
+ *
+ * Pass null for instructorId to span every course (admins); pass an id to
+ * scope to the courses that instructor owns.
+ */
+export function getUnansweredQuestions(
+  instructorId: number | null
+): QueuedQuestion[] {
   return db
     .select({
       id: comments.id,
@@ -321,16 +331,57 @@ export function getUnansweredQuestions(
       lessonTitle: lessons.title,
       courseTitle: courses.title,
       courseSlug: courses.slug,
-      authorId: author.id,
-      authorName: author.name,
-      authorAvatarUrl: author.avatarUrl,
+      authorId: questionAuthor.id,
+      authorName: questionAuthor.name,
+      authorAvatarUrl: questionAuthor.avatarUrl,
     })
     .from(comments)
-    .innerJoin(author, eq(comments.userId, author.id))
+    .innerJoin(questionAuthor, eq(comments.userId, questionAuthor.id))
     .innerJoin(lessons, eq(comments.lessonId, lessons.id))
     .innerJoin(modules, eq(lessons.moduleId, modules.id))
     .innerJoin(courses, eq(modules.courseId, courses.id))
-    .where(and(...conditions))
+    .where(
+      and(
+        isQuestion(),
+        isUnanswered(),
+        instructorId === null
+          ? undefined
+          : eq(courses.instructorId, instructorId)
+      )
+    )
     .orderBy(desc(comments.createdAt), desc(comments.id))
     .all();
+}
+
+/**
+ * How many questions were asked on a course's lessons since a given ISO
+ * timestamp (null for no lower bound), and how many of those are unanswered.
+ */
+export function countCourseQuestions(
+  courseId: number,
+  since: string | null
+): { questions: number; unanswered: number } {
+  const row = db
+    .select({
+      questions: sql<number>`count(*)`,
+      unanswered: sql<number>`coalesce(sum(case when ${isUnanswered()} then 1 else 0 end), 0)`,
+    })
+    .from(comments)
+    .innerJoin(questionAuthor, eq(comments.userId, questionAuthor.id))
+    .innerJoin(lessons, eq(comments.lessonId, lessons.id))
+    .innerJoin(modules, eq(lessons.moduleId, modules.id))
+    .innerJoin(courses, eq(modules.courseId, courses.id))
+    .where(
+      and(
+        isQuestion(),
+        eq(courses.id, courseId),
+        since === null ? undefined : gte(comments.createdAt, since)
+      )
+    )
+    .get();
+
+  return {
+    questions: Number(row?.questions ?? 0),
+    unanswered: Number(row?.unanswered ?? 0),
+  };
 }

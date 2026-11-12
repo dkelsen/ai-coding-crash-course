@@ -8,6 +8,7 @@ import type { AnalyticsRange } from "~/lib/analyticsRange";
 import { CourseStatus } from "~/db/schema";
 
 const NO_SALES = { salesCents: 0, earningsCents: 0 };
+const NO_QUESTIONS = { questions: 0, unansweredQuestions: 0 };
 
 const EMPTY_COURSE: NonNullable<InstructorAnalyticsData["selectedCourse"]> = {
   ...NO_SALES,
@@ -16,6 +17,7 @@ const EMPTY_COURSE: NonNullable<InstructorAnalyticsData["selectedCourse"]> = {
   notFinished: 0,
   finishingRate: 0,
   progressionRate: 0,
+  ...NO_QUESTIONS,
   modules: [],
 };
 
@@ -111,6 +113,26 @@ describe("InstructorAnalytics", () => {
 
     expect(screen.getByText("Course sales").parentElement).toHaveTextContent("$100.00");
     expect(screen.getByText("Course earnings").parentElement).toHaveTextContent("$80.00");
+  });
+
+  it("shows the selected course's questions with how many are unanswered", () => {
+    renderAnalytics(
+      analyticsData({
+        selectedCourse: { ...EMPTY_COURSE, questions: 12, unansweredQuestions: 3 },
+      })
+    );
+
+    const tile = screen.getByText("Questions").parentElement;
+    expect(tile).toHaveTextContent("12");
+    expect(tile).toHaveTextContent("3 unanswered");
+  });
+
+  it("shows zero questions for a period with none", () => {
+    renderAnalytics(analyticsData());
+
+    const tile = screen.getByText("Questions").parentElement;
+    expect(tile).toHaveTextContent("0");
+    expect(tile).toHaveTextContent("0 unanswered");
   });
 
   it("labels an archived course in the picker", async () => {

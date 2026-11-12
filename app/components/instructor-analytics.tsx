@@ -36,12 +36,23 @@ function formatPercent(rate: number): string {
   return percentFormatter.format(rate);
 }
 
-function StatCard({ label, value }: { label: string; value: string }) {
+function StatCard({
+  label,
+  value,
+  detail,
+}: {
+  label: string;
+  value: string;
+  detail?: string;
+}) {
   return (
     <Card>
       <CardHeader>
         <CardDescription>{label}</CardDescription>
         <CardTitle className="text-3xl tabular-nums">{value}</CardTitle>
+        {detail !== undefined && (
+          <p className="text-sm text-muted-foreground tabular-nums">{detail}</p>
+        )}
       </CardHeader>
     </Card>
   );
@@ -165,6 +176,14 @@ export function InstructorAnalytics({
           <div className="grid gap-4 sm:grid-cols-2">
             <StatCard label="Finishing rate" value={formatPercent(selectedCourse.finishingRate)} />
             <StatCard label="Progression rate" value={formatPercent(selectedCourse.progressionRate)} />
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <StatCard
+              label="Questions"
+              value={String(selectedCourse.questions)}
+              detail={`${selectedCourse.unansweredQuestions} unanswered`}
+            />
           </div>
 
           <LessonCompletionTable modules={selectedCourse.modules} />

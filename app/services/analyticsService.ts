@@ -11,6 +11,7 @@ import {
   purchases,
 } from "~/db/schema";
 import { ANALYTICS_RANGE_DAYS, type AnalyticsRange } from "~/lib/analyticsRange";
+import { countCourseQuestions } from "~/services/commentService";
 
 // ─── Analytics Service ───
 // Instructor-facing sales and earnings figures over a time window.
@@ -225,11 +226,18 @@ function selectCourseId(
   return (requested ?? fallback)?.id ?? null;
 }
 
+/** Questions asked on the course in the window, and how many still await staff. */
+function courseQuestions(courseId: number, start: string | null) {
+  const { questions, unanswered } = countCourseQuestions(courseId, start);
+  return { questions, unansweredQuestions: unanswered };
+}
+
 function selectedCourseStats(courseId: number, start: string | null) {
   const students = studentStats(courseId, start);
   return {
     ...salesAndEarnings(eq(courses.id, courseId), start),
     ...students,
+    ...courseQuestions(courseId, start),
     modules: lessonCompletion(courseId, start, students.students),
   };
 }
