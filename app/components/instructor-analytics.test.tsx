@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, useLocation } from "react-router";
 import { InstructorAnalytics } from "./instructor-analytics";
@@ -16,6 +16,7 @@ const EMPTY_COURSE: NonNullable<InstructorAnalyticsData["selectedCourse"]> = {
   notFinished: 0,
   finishingRate: 0,
   progressionRate: 0,
+  modules: [],
 };
 
 function analyticsData(
@@ -203,5 +204,49 @@ describe("InstructorAnalytics", () => {
     expect(screen.getByText("Not finished").parentElement).toHaveTextContent("0");
     expect(screen.getByText("Finishing rate").parentElement).toHaveTextContent("0%");
     expect(screen.getByText("Progression rate").parentElement).toHaveTextContent("0%");
+  });
+});
+
+describe("InstructorAnalytics lesson completion table", () => {
+  const MODULES = [
+    {
+      id: 10,
+      title: "Getting Started",
+      lessons: [
+        { id: 100, title: "Welcome", completedCount: 12, completedRate: 0.24 },
+        { id: 101, title: "Setup", completedCount: 1, completedRate: 1 / 3 },
+      ],
+    },
+    {
+      id: 11,
+      title: "Advanced Types",
+      lessons: [{ id: 102, title: "Generics", completedCount: 0, completedRate: 0 }],
+    },
+  ];
+
+  it("groups lessons under their module in order", () => {
+    renderAnalytics(analyticsData({ selectedCourse: { ...EMPTY_COURSE, modules: MODULES } }));
+
+    const table = screen.getByRole("table", { name: "Lesson completion" });
+    const rowText = within(table)
+      .getAllByRole("row")
+      .map((row) => row.textContent);
+
+    expect(rowText).toEqual([
+      "LessonCompleted",
+      "Getting Started",
+      "Welcome12 (24%)",
+      "Setup1 (33%)",
+      "Advanced Types",
+      "Generics0 (0%)",
+    ]);
+  });
+
+  it("shows each lesson's completions as count and whole-number percentage", () => {
+    renderAnalytics(analyticsData({ selectedCourse: { ...EMPTY_COURSE, modules: MODULES } }));
+
+    expect(screen.getByRole("row", { name: /Welcome/ })).toHaveTextContent("12 (24%)");
+    expect(screen.getByRole("row", { name: /Setup/ })).toHaveTextContent("1 (33%)");
+    expect(screen.getByRole("row", { name: /Generics/ })).toHaveTextContent("0 (0%)");
   });
 });

@@ -47,7 +47,44 @@ function StatCard({ label, value }: { label: string; value: string }) {
   );
 }
 
-type PickerCourse = InstructorAnalyticsData["courses"][number];
+type CourseModules = NonNullable<InstructorAnalyticsData["selectedCourse"]>["modules"];
+
+/** Every lesson in course order, grouped by module, with "count (pct%)" completions. */
+function LessonCompletionTable({ modules }: { modules: CourseModules }) {
+  return (
+    <Card className="p-0">
+      <table aria-label="Lesson completion" className="w-full text-sm">
+        <thead>
+          <tr className="border-b text-left text-muted-foreground">
+            <th scope="col" className="px-4 py-2 font-medium">Lesson</th>
+            <th scope="col" className="px-4 py-2 text-right font-medium">Completed</th>
+          </tr>
+        </thead>
+        {modules.map((mod) => (
+          <tbody key={mod.id}>
+            <tr className="bg-muted/50">
+              <th scope="colgroup" colSpan={2} className="px-4 py-2 text-left font-semibold">
+                {mod.title}
+              </th>
+            </tr>
+            {mod.lessons.map((lesson) => (
+              <tr key={lesson.id} className="border-t">
+                <th scope="row" className="px-4 py-2 pl-8 text-left font-normal">
+                  {lesson.title}
+                </th>
+                <td className="px-4 py-2 text-right tabular-nums">
+                  {lesson.completedCount} ({formatPercent(lesson.completedRate)})
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        ))}
+      </table>
+    </Card>
+  );
+}
+
+type PickerCourse =InstructorAnalyticsData["courses"][number];
 
 function courseLabel(course: PickerCourse): string {
   return course.status === CourseStatus.Archived
@@ -129,6 +166,8 @@ export function InstructorAnalytics({
             <StatCard label="Finishing rate" value={formatPercent(selectedCourse.finishingRate)} />
             <StatCard label="Progression rate" value={formatPercent(selectedCourse.progressionRate)} />
           </div>
+
+          <LessonCompletionTable modules={selectedCourse.modules} />
         </section>
       )}
     </div>

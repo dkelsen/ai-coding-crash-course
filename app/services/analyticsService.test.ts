@@ -615,4 +615,101 @@ describe("getInstructorAnalytics", () => {
       });
     });
   });
+  describe("selected course lesson completion", () => {
+    it("lists every lesson grouped by module in position order, with zeros where nobody completed", () => {
+      // Module 2 is created first so insertion order differs from position order.
+      const [m2l1] = addModuleWithLessons(base.course.id, 2, 1);
+      const [m1l1, m1l2] = addModuleWithLessons(base.course.id, 1, 2);
+      const m2 = testDb.select().from(schema.modules).all().find((m) => m.position === 2)!;
+      const m2l0 = testDb
+        .insert(schema.lessons)
+        .values({ moduleId: m2.id, title: "Lesson 2.0", position: 0 })
+        .returning()
+        .get().id;
+
+      const result = getInstructorAnalytics({
+        instructorId: base.instructor.id,
+        range: "30d",
+        now: NOW,
+      });
+
+      const zero = { completedCount: 0, completedRate: 0 };
+      expect(result.selectedCourse?.modules).toEqual([
+        {
+          id: expect.any(Number),
+          title: "Module 1",
+          lessons: [
+            { id: m1l1, title: "Lesson 1.1", ...zero },
+            { id: m1l2, title: "Lesson 1.2", ...zero },
+          ],
+        },
+        {
+          id: m2.id,
+          title: "Module 2",
+          lessons: [
+            { id: m2l0, title: "Lesson 2.0", ...zero },
+            { id: m2l1, title: "Lesson 2.1", ...zero },
+          ],
+        },
+      ]);
+    });
+
+    it("counts completions by the window group only, with the rate relative to the group size", () => {
+      const [l1, l2] = addModuleWithLessons(base.course.id, 1, 2);
+      const otherCourse = addCourse({ createdAt: daysAgo(100) });
+      const [otherLesson] = addModuleWithLessons(otherCourse.id, 1, 1);
+
+      const a = addEnrollment(base.course.id, daysAgo(5));
+      addProgress(a, l1);
+      addProgress(a, l2);
+      const b = addEnrollment(base.course.id, daysAgo(5));
+      addProgress(b, l1);
+      addProgress(b, l2, schema.LessonProgressStatus.InProgress);
+      const c = addEnrollment(base.course.id, daysAgo(5));
+      addProgress(c, otherLesson);
+      addEnrollment(base.course.id, daysAgo(5));
+
+      // Enrolled before the window: not in the group.
+      const veteran = addEnrollment(base.course.id, daysAgo(60));
+      addProgress(veteran, l1);
+      addProgress(veteran, l2);
+
+      const result = getInstructorAnalytics({
+        instructorId: base.instructor.id,
+        range: "30d",
+        now: NOW,
+      });
+
+      expect(result.selectedCourse?.modules[0].lessons).toMatchObject([
+        { id: l1, completedCount: 2, completedRate: 0.5 },
+        { id: l2, completedCount: 1, completedRate: 0.25 },
+      ]);
+    });
+
+    it("reports zero counts and rates when nobody enrolled in the window", () => {
+      const [lesson] = addModuleWithLessons(base.course.id, 1, 1);
+      const veteran = addEnrollment(base.course.id, daysAgo(60));
+      addProgress(veteran, lesson);
+
+      const result = getInstructorAnalytics({
+        instructorId: base.instructor.id,
+        range: "30d",
+        now: NOW,
+      });
+
+      expect(result.selectedCourse?.modules[0].lessons).toMatchObject([
+        { id: lesson, completedCount: 0, completedRate: 0 },
+      ]);
+    });
+
+    it("returns no modules for a course with no lessons", () => {
+      const result = getInstructorAnalytics({
+        instructorId: base.instructor.id,
+        range: "30d",
+        now: NOW,
+      });
+
+      expect(result.selectedCourse?.modules).toEqual([]);
+    });
+  });
 });

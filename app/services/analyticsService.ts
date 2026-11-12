@@ -1,4 +1,4 @@
-import { and, count, desc, eq, gte, inArray, sum, type SQL } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, inArray, sum, type SQL } from "drizzle-orm";
 import { db } from "~/db";
 import {
   CourseStatus,
@@ -119,6 +119,82 @@ function studentStats(courseId: number, start: string | null) {
   };
 }
 
+/** Per-lesson completion counts for the window's student group, keyed by lesson id. */
+function groupCompletionsByLesson(courseId: number, start: string | null) {
+  const rows = db
+    .select({ lessonId: lessons.id, completed: count() })
+    .from(lessonProgress)
+    .innerJoin(lessons, eq(lessonProgress.lessonId, lessons.id))
+    .innerJoin(modules, eq(lessons.moduleId, modules.id))
+    .innerJoin(
+      enrollments,
+      and(
+        eq(enrollments.userId, lessonProgress.userId),
+        eq(enrollments.courseId, modules.courseId)
+      )
+    )
+    .where(
+      and(
+        windowGroupFilter(courseId, start),
+        eq(lessonProgress.status, LessonProgressStatus.Completed)
+      )
+    )
+    .groupBy(lessons.id)
+    .all();
+  return new Map(rows.map((row) => [row.lessonId, row.completed]));
+}
+
+type LessonCompletion = {
+  id: number;
+  title: string;
+  completedCount: number;
+  completedRate: number;
+};
+
+type ModuleCompletion = { id: number; title: string; lessons: LessonCompletion[] };
+
+/**
+ * Every lesson in the course, grouped by module in position order, with how
+ * many of the window's `students` completed it. Rates are 0–1, and 0 when the
+ * group is empty.
+ */
+function lessonCompletion(
+  courseId: number,
+  start: string | null,
+  students: number
+): ModuleCompletion[] {
+  const completions = groupCompletionsByLesson(courseId, start);
+  const rows = db
+    .select({
+      moduleId: modules.id,
+      moduleTitle: modules.title,
+      lessonId: lessons.id,
+      lessonTitle: lessons.title,
+    })
+    .from(modules)
+    .innerJoin(lessons, eq(lessons.moduleId, modules.id))
+    .where(eq(modules.courseId, courseId))
+    .orderBy(asc(modules.position), asc(modules.id), asc(lessons.position), asc(lessons.id))
+    .all();
+
+  const result: ModuleCompletion[] = [];
+  for (const row of rows) {
+    let mod = result.at(-1);
+    if (mod?.id !== row.moduleId) {
+      mod = { id: row.moduleId, title: row.moduleTitle, lessons: [] };
+      result.push(mod);
+    }
+    const completedCount = completions.get(row.lessonId) ?? 0;
+    mod.lessons.push({
+      id: row.lessonId,
+      title: row.lessonTitle,
+      completedCount,
+      completedRate: students === 0 ? 0 : completedCount / students,
+    });
+  }
+  return result;
+}
+
 /** The instructor's published and archived courses, newest first. Drafts can't be picked. */
 function pickerCourses(instructorId: number) {
   return db
@@ -149,6 +225,15 @@ function selectCourseId(
   return (requested ?? fallback)?.id ?? null;
 }
 
+function selectedCourseStats(courseId: number, start: string | null) {
+  const students = studentStats(courseId, start);
+  return {
+    ...salesAndEarnings(eq(courses.id, courseId), start),
+    ...students,
+    modules: lessonCompletion(courseId, start, students.students),
+  };
+}
+
 export type InstructorAnalytics = ReturnType<typeof getInstructorAnalytics>;
 
 export function getInstructorAnalytics({
@@ -171,11 +256,6 @@ export function getInstructorAnalytics({
     courses: options,
     selectedCourseId,
     selectedCourse:
-      selectedCourseId === null
-        ? null
-        : {
-            ...salesAndEarnings(eq(courses.id, selectedCourseId), start),
-            ...studentStats(selectedCourseId, start),
-          },
+      selectedCourseId === null ? null : selectedCourseStats(selectedCourseId, start),
   };
 }
