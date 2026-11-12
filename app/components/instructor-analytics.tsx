@@ -1,0 +1,194 @@
+import { useSearchParams } from "react-router";
+import { Card, CardDescription, CardHeader, CardTitle } from "~/components/ui/card";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "~/components/ui/select";
+import { Tabs, TabsList, TabsTrigger } from "~/components/ui/tabs";
+import { CourseStatus } from "~/db/schema";
+import {
+  ANALYTICS_RANGES,
+  ANALYTICS_RANGE_LABELS,
+  parseAnalyticsRange,
+  type AnalyticsRange,
+} from "~/lib/analyticsRange";
+import type { InstructorAnalyticsData } from "~/services/analyticsService";
+
+const moneyFormatter = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "USD",
+});
+
+function formatMoney(cents: number): string {
+  return moneyFormatter.format(cents / 100);
+}
+
+const percentFormatter = new Intl.NumberFormat("en-US", {
+  style: "percent",
+  maximumFractionDigits: 0,
+});
+
+/** A 0–1 rate as a whole-number percentage, e.g. 0.125 → "13%". */
+function formatPercent(rate: number): string {
+  return percentFormatter.format(rate);
+}
+
+function StatCard({
+  label,
+  value,
+  detail,
+}: {
+  label: string;
+  value: string;
+  detail?: string;
+}) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardDescription>{label}</CardDescription>
+        <CardTitle className="text-3xl tabular-nums">{value}</CardTitle>
+        {detail !== undefined && (
+          <p className="text-sm text-muted-foreground tabular-nums">{detail}</p>
+        )}
+      </CardHeader>
+    </Card>
+  );
+}
+
+type CourseModules = NonNullable<InstructorAnalyticsData["selectedCourse"]>["modules"];
+
+/** Every lesson in course order, grouped by module, with "count (pct%)" completions. */
+function LessonCompletionTable({ modules }: { modules: CourseModules }) {
+  return (
+    <Card className="p-0">
+      <table aria-label="Lesson completion" className="w-full text-sm">
+        <thead>
+          <tr className="border-b text-left text-muted-foreground">
+            <th scope="col" className="px-4 py-2 font-medium">Lesson</th>
+            <th scope="col" className="px-4 py-2 text-right font-medium">Completed</th>
+          </tr>
+        </thead>
+        {modules.map((mod) => (
+          <tbody key={mod.id}>
+            <tr className="bg-muted/50">
+              <th scope="colgroup" colSpan={2} className="px-4 py-2 text-left font-semibold">
+                {mod.title}
+              </th>
+            </tr>
+            {mod.lessons.map((lesson) => (
+              <tr key={lesson.id} className="border-t">
+                <th scope="row" className="px-4 py-2 pl-8 text-left font-normal">
+                  {lesson.title}
+                </th>
+                <td className="px-4 py-2 text-right tabular-nums">
+                  {lesson.completedCount} ({formatPercent(lesson.completedRate)})
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        ))}
+      </table>
+    </Card>
+  );
+}
+
+type PickerCourse = InstructorAnalyticsData["courses"][number];
+
+function courseLabel(course: PickerCourse): string {
+  return course.status === CourseStatus.Archived
+    ? `${course.title} (Archived)`
+    : course.title;
+}
+
+/** Displays instructor analytics. Holds no data of its own; the controls write `?range=` and `?course=`. */
+export function InstructorAnalytics({
+  analytics,
+  range,
+}: {
+  analytics: InstructorAnalyticsData;
+  range: AnalyticsRange;
+}) {
+  const [, setSearchParams] = useSearchParams();
+
+  function setParam(name: string, value: string) {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.set(name, value);
+      return next;
+    });
+  }
+
+  const { selectedCourse, selectedCourseId } = analytics;
+
+  return (
+    <div className="space-y-6">
+      <Tabs value={range} onValueChange={(value) => setParam("range", parseAnalyticsRange(value))}>
+        <TabsList aria-label="Time range">
+          {ANALYTICS_RANGES.map((option) => (
+            <TabsTrigger key={option} value={option}>
+              {ANALYTICS_RANGE_LABELS[option]}
+            </TabsTrigger>
+          ))}
+        </TabsList>
+      </Tabs>
+
+      <div className="grid gap-4 sm:grid-cols-2">
+        <StatCard label="Total sales" value={formatMoney(analytics.totals.salesCents)} />
+        <StatCard label="Total earnings" value={formatMoney(analytics.totals.earningsCents)} />
+      </div>
+
+      {selectedCourse === null || selectedCourseId === null ? (
+        <p className="text-muted-foreground">
+          Publish a course to see its analytics.
+        </p>
+      ) : (
+        <section className="space-y-4">
+          <Select
+            value={String(selectedCourseId)}
+            onValueChange={(value) => setParam("course", value)}
+          >
+            <SelectTrigger aria-label="Course" className="w-full sm:w-80">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {analytics.courses.map((course) => (
+                <SelectItem key={course.id} value={String(course.id)}>
+                  {courseLabel(course)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <StatCard label="Course sales" value={formatMoney(selectedCourse.salesCents)} />
+            <StatCard label="Course earnings" value={formatMoney(selectedCourse.earningsCents)} />
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-3">
+            <StatCard label="Students" value={String(selectedCourse.students)} />
+            <StatCard label="Finished" value={String(selectedCourse.finished)} />
+            <StatCard label="Not finished" value={String(selectedCourse.notFinished)} />
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <StatCard label="Finishing rate" value={formatPercent(selectedCourse.finishingRate)} />
+            <StatCard label="Progression rate" value={formatPercent(selectedCourse.progressionRate)} />
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <StatCard
+              label="Questions"
+              value={String(selectedCourse.questions)}
+              detail={`${selectedCourse.unansweredQuestions} unanswered`}
+            />
+          </div>
+
+          <LessonCompletionTable modules={selectedCourse.modules} />
+        </section>
+      )}
+    </div>
+  );
+}

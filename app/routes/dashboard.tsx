@@ -3,6 +3,11 @@ import type { Route } from "./+types/dashboard";
 import { getUserEnrolledCourses } from "~/services/enrollmentService";
 import { calculateProgress, getCompletedLessonCount, getTotalLessonCount, getNextIncompleteLesson } from "~/services/progressService";
 import { getCurrentUserId } from "~/lib/session";
+import { getUserById } from "~/services/userService";
+import { getInstructorAnalytics } from "~/services/analyticsService";
+import { parseAnalyticsRange } from "~/lib/analyticsRange";
+import { UserRole } from "~/db/schema";
+import { InstructorAnalytics } from "~/components/instructor-analytics";
 import { Card, CardContent, CardFooter, CardHeader } from "~/components/ui/card";
 import { Button } from "~/components/ui/button";
 import { Skeleton } from "~/components/ui/skeleton";
@@ -24,6 +29,22 @@ export async function loader({ request }: Route.LoaderArgs) {
     throw data("Select a user from the DevUI panel to view your dashboard.", {
       status: 401,
     });
+  }
+
+  const user = getUserById(currentUserId);
+
+  if (user?.role === UserRole.Instructor) {
+    const searchParams = new URL(request.url).searchParams;
+    const range = parseAnalyticsRange(searchParams.get("range"));
+    // Anything that isn't one of the instructor's pickable courses falls back in the service.
+    const courseId = Number(searchParams.get("course")) || undefined;
+    const analytics = getInstructorAnalytics({
+      instructorId: currentUserId,
+      courseId,
+      range,
+      now: new Date(),
+    });
+    return { view: "instructor" as const, analytics, range };
   }
 
   const enrolledCourses = getUserEnrolledCourses(currentUserId);
@@ -59,7 +80,7 @@ export async function loader({ request }: Route.LoaderArgs) {
   const completedCourses = coursesWithProgress.filter((c) => c.isCompleted);
   const inProgressCourses = coursesWithProgress.filter((c) => !c.isCompleted);
 
-  return { inProgressCourses, completedCourses };
+  return { view: "student" as const, inProgressCourses, completedCourses };
 }
 
 function DashboardCardSkeleton() {
@@ -102,6 +123,32 @@ export function HydrateFallback() {
 }
 
 export default function Dashboard({ loaderData }: Route.ComponentProps) {
+  if (loaderData.view === "instructor") {
+    return (
+      <div className="mx-auto max-w-7xl p-6 lg:p-8">
+        <nav className="mb-6 text-sm text-muted-foreground">
+          <Link to="/" className="hover:text-foreground">
+            Home
+          </Link>
+          <span className="mx-2">/</span>
+          <span className="text-foreground">Dashboard</span>
+        </nav>
+
+        <div className="mb-8">
+          <h1 className="text-3xl font-bold">Instructor Dashboard</h1>
+          <p className="mt-1 text-muted-foreground">
+            Sales, earnings, student progress, and questions for your courses
+          </p>
+        </div>
+
+        <InstructorAnalytics
+          analytics={loaderData.analytics}
+          range={loaderData.range}
+        />
+      </div>
+    );
+  }
+
   const { inProgressCourses, completedCourses } = loaderData;
   const totalCourses = inProgressCourses.length + completedCourses.length;
 

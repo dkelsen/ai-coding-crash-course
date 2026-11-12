@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { createTestDb, seedBaseData } from "~/test/setup";
+import { eq } from "drizzle-orm";
 import * as schema from "~/db/schema";
 
 let testDb: ReturnType<typeof createTestDb>;
@@ -22,6 +23,7 @@ import {
   getCommentCountForLesson,
   getUnansweredQuestions,
   getCourseForLesson,
+  countCourseQuestions,
 } from "./commentService";
 
 function createUser(name: string, email: string, role: schema.UserRole) {
@@ -492,6 +494,118 @@ describe("commentService", () => {
       expect(getUnansweredQuestions(base.instructor.id).map((q) => q.body)).toEqual(
         ["Newer", "Older"]
       );
+    });
+  });
+
+  describe("countCourseQuestions", () => {
+    it("counts an unanswered student question", () => {
+      createComment(base.user.id, lesson.id, null, "How?");
+
+      expect(countCourseQuestions(base.course.id, null)).toEqual({
+        questions: 1,
+        unansweredQuestions: 1,
+      });
+    });
+
+    it("counts only questions created at or after the given time", () => {
+      const askedAt = (createdAt: string, body: string) => {
+        const question = createComment(base.user.id, lesson.id, null, body);
+        testDb
+          .update(schema.comments)
+          .set({ createdAt })
+          .where(eq(schema.comments.id, question.id))
+          .run();
+      };
+      askedAt("2026-06-01T00:00:00.000Z", "At the start");
+      askedAt("2026-06-02T00:00:00.000Z", "After");
+      askedAt("2026-05-31T23:59:59.999Z", "Before");
+
+      expect(
+        countCourseQuestions(base.course.id, "2026-06-01T00:00:00.000Z")
+      ).toEqual({ questions: 2, unansweredQuestions: 2 });
+      expect(countCourseQuestions(base.course.id, null)).toEqual({
+        questions: 3,
+        unansweredQuestions: 3,
+      });
+    });
+
+    it("counts only questions on the given course's lessons", () => {
+      const otherCourse = testDb
+        .insert(schema.courses)
+        .values({
+          title: "Other Course",
+          slug: "other-course",
+          description: "Another",
+          salesCopy: "Sales copy.",
+          instructorId: base.instructor.id,
+          categoryId: base.category.id,
+          status: schema.CourseStatus.Published,
+        })
+        .returning()
+        .get();
+      const otherLesson = createLesson(otherCourse.id, "Other Lesson");
+
+      createComment(base.user.id, lesson.id, null, "Mine");
+      createComment(base.user.id, otherLesson.id, null, "Elsewhere");
+      createComment(base.user.id, otherLesson.id, null, "Elsewhere too");
+
+      expect(countCourseQuestions(base.course.id, null)).toEqual({
+        questions: 1,
+        unansweredQuestions: 1,
+      });
+    });
+
+    it("counts a question answered by the instructor or an admin as answered", () => {
+      const admin = createUser(
+        "Admin",
+        "admin@example.com",
+        schema.UserRole.Admin
+      );
+      const student = createUser(
+        "Other",
+        "other@example.com",
+        schema.UserRole.Student
+      );
+      const byInstructor = createComment(base.user.id, lesson.id, null, "A?");
+      createComment(base.instructor.id, lesson.id, byInstructor.id, "A.");
+      const byAdmin = createComment(base.user.id, lesson.id, null, "B?");
+      createComment(admin.id, lesson.id, byAdmin.id, "B.");
+      const byStudent = createComment(base.user.id, lesson.id, null, "C?");
+      createComment(student.id, lesson.id, byStudent.id, "Me too");
+      const retracted = createComment(base.user.id, lesson.id, null, "D?");
+      const reply = createComment(base.instructor.id, lesson.id, retracted.id, "Oops");
+      deleteComment(reply.id, base.instructor.id, false);
+
+      expect(countCourseQuestions(base.course.id, null)).toEqual({
+        questions: 4,
+        unansweredQuestions: 2,
+      });
+    });
+
+    it("ignores deleted comments, replies and staff-written comments", () => {
+      const admin = createUser(
+        "Admin",
+        "admin@example.com",
+        schema.UserRole.Admin
+      );
+      const deleted = createComment(base.user.id, lesson.id, null, "Spam");
+      deleteComment(deleted.id, base.instructor.id, true);
+      const question = createComment(base.user.id, lesson.id, null, "How?");
+      createComment(base.user.id, lesson.id, question.id, "Still stuck");
+      createComment(base.instructor.id, lesson.id, null, "Announcement");
+      createComment(admin.id, lesson.id, null, "Notice");
+
+      expect(countCourseQuestions(base.course.id, null)).toEqual({
+        questions: 1,
+        unansweredQuestions: 1,
+      });
+    });
+
+    it("reports zeros for a course with no questions", () => {
+      expect(countCourseQuestions(base.course.id, null)).toEqual({
+        questions: 0,
+        unansweredQuestions: 0,
+      });
     });
   });
 
