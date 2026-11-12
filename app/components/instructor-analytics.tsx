@@ -26,12 +26,23 @@ function formatMoney(cents: number): string {
   return moneyFormatter.format(cents / 100);
 }
 
-function StatCard({ label, value }: { label: string; value: string }) {
+function StatCard({
+  label,
+  value,
+  detail,
+}: {
+  label: string;
+  value: string;
+  detail?: string;
+}) {
   return (
     <Card>
       <CardHeader>
         <CardDescription>{label}</CardDescription>
         <CardTitle className="text-3xl tabular-nums">{value}</CardTitle>
+        {detail !== undefined && (
+          <p className="text-sm text-muted-foreground tabular-nums">{detail}</p>
+        )}
       </CardHeader>
     </Card>
   );
@@ -107,6 +118,14 @@ export function InstructorAnalytics({
           <div className="grid gap-4 sm:grid-cols-2">
             <StatCard label="Course sales" value={formatMoney(selectedCourse.salesCents)} />
             <StatCard label="Course earnings" value={formatMoney(selectedCourse.earningsCents)} />
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <StatCard
+              label="Questions"
+              value={String(selectedCourse.questions)}
+              detail={`${selectedCourse.unansweredQuestions} unanswered`}
+            />
           </div>
         </section>
       )}

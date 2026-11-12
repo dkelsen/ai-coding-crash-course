@@ -358,7 +358,7 @@ describe("getInstructorAnalytics", () => {
         });
 
         expect(result.selectedCourseId).toBe(base.course.id);
-        expect(result.selectedCourse).toEqual({ salesCents: 0, earningsCents: 0 });
+        expect(result.selectedCourse).toMatchObject({ salesCents: 0, earningsCents: 0 });
       }
     });
 
@@ -397,7 +397,7 @@ describe("getInstructorAnalytics", () => {
         now: NOW,
       });
 
-      expect(result.selectedCourse).toEqual({
+      expect(result.selectedCourse).toMatchObject({
         salesCents: 4999,
         earningsCents: 3999,
       });
@@ -415,7 +415,7 @@ describe("getInstructorAnalytics", () => {
         now: NOW,
       });
 
-      expect(result.selectedCourse).toEqual({
+      expect(result.selectedCourse).toMatchObject({
         salesCents: 25995,
         earningsCents: 20796,
       });
@@ -430,7 +430,111 @@ describe("getInstructorAnalytics", () => {
         now: NOW,
       });
 
-      expect(result.selectedCourse).toEqual({ salesCents: 0, earningsCents: 0 });
+      expect(result.selectedCourse).toMatchObject({ salesCents: 0, earningsCents: 0 });
+    });
+  });
+
+  describe("selected course questions", () => {
+    function addLesson(courseId: number) {
+      const mod = testDb
+        .insert(schema.modules)
+        .values({ courseId, title: "Module", position: 1 })
+        .returning()
+        .get();
+      return testDb
+        .insert(schema.lessons)
+        .values({ moduleId: mod.id, title: "Lesson", position: 1 })
+        .returning()
+        .get();
+    }
+
+    function addQuestion(lessonId: number, createdAt: string) {
+      return testDb
+        .insert(schema.comments)
+        .values({ userId: base.user.id, lessonId, body: "How?", createdAt })
+        .returning()
+        .get();
+    }
+
+    function answer(question: { id: number; lessonId: number }) {
+      testDb
+        .insert(schema.comments)
+        .values({
+          userId: base.instructor.id,
+          lessonId: question.lessonId,
+          parentId: question.id,
+          body: "Like this",
+          createdAt: daysAgo(0),
+        })
+        .run();
+    }
+
+    it("counts questions and unanswered questions asked on the course in the window", () => {
+      const lesson = addLesson(base.course.id);
+      answer(addQuestion(lesson.id, daysAgo(1)));
+      addQuestion(lesson.id, daysAgo(30));
+      addQuestion(lesson.id, daysAgo(30, -1));
+
+      const result = getInstructorAnalytics({
+        instructorId: base.instructor.id,
+        range: "30d",
+        now: NOW,
+      });
+
+      expect(result.selectedCourse).toMatchObject({
+        questions: 2,
+        unansweredQuestions: 1,
+      });
+    });
+
+    it("counts every question for all time", () => {
+      const lesson = addLesson(base.course.id);
+      addQuestion(lesson.id, "2001-01-01T00:00:00.000Z");
+      answer(addQuestion(lesson.id, daysAgo(1)));
+
+      const result = getInstructorAnalytics({
+        instructorId: base.instructor.id,
+        range: "all",
+        now: NOW,
+      });
+
+      expect(result.selectedCourse).toMatchObject({
+        questions: 2,
+        unansweredQuestions: 1,
+      });
+    });
+
+    it("counts only questions on the selected course", () => {
+      const other = addCourse({ createdAt: "2026-01-01T00:00:00.000Z" });
+      addQuestion(addLesson(other.id).id, daysAgo(1));
+      addQuestion(addLesson(base.course.id).id, daysAgo(1));
+
+      const result = getInstructorAnalytics({
+        instructorId: base.instructor.id,
+        courseId: other.id,
+        range: "30d",
+        now: NOW,
+      });
+
+      expect(result.selectedCourse).toMatchObject({
+        questions: 1,
+        unansweredQuestions: 1,
+      });
+    });
+
+    it("reports zeros when no questions were asked in the window", () => {
+      addQuestion(addLesson(base.course.id).id, daysAgo(8));
+
+      const result = getInstructorAnalytics({
+        instructorId: base.instructor.id,
+        range: "7d",
+        now: NOW,
+      });
+
+      expect(result.selectedCourse).toMatchObject({
+        questions: 0,
+        unansweredQuestions: 0,
+      });
     });
   });
 });

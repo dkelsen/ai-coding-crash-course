@@ -2,6 +2,7 @@ import { and, desc, eq, gte, inArray, sum, type SQL } from "drizzle-orm";
 import { db } from "~/db";
 import { CourseStatus, courses, purchases } from "~/db/schema";
 import { ANALYTICS_RANGE_DAYS, type AnalyticsRange } from "~/lib/analyticsRange";
+import { countCourseQuestions } from "~/services/commentService";
 
 // ─── Analytics Service ───
 // Instructor-facing sales and earnings figures over a time window.
@@ -67,7 +68,13 @@ function selectCourseId(
   return (requested ?? fallback)?.id ?? null;
 }
 
-export type InstructorAnalytics = ReturnType<typeof getInstructorAnalytics>;
+/** Questions asked on the course in the window, and how many still await staff. */
+function courseQuestions(courseId: number, start: string | null) {
+  const { questions, unanswered } = countCourseQuestions(courseId, start);
+  return { questions, unansweredQuestions: unanswered };
+}
+
+export type InstructorAnalytics =ReturnType<typeof getInstructorAnalytics>;
 
 export function getInstructorAnalytics({
   instructorId,
@@ -91,6 +98,9 @@ export function getInstructorAnalytics({
     selectedCourse:
       selectedCourseId === null
         ? null
-        : salesAndEarnings(eq(courses.id, selectedCourseId), start),
+        : {
+            ...salesAndEarnings(eq(courses.id, selectedCourseId), start),
+            ...courseQuestions(selectedCourseId, start),
+          },
   };
 }
